@@ -121,7 +121,7 @@ class Blocknewsletter extends Module
 		Configuration::updateValue('NW_SALT', Tools::passwdGen(16));
 
 		return Db::getInstance()->execute('
-		CREATE TABLE IF NOT EXISTS `'._DB_PREFIX_.'newsletter` (
+		CREATE TABLE IF NOT EXISTS `'._DB_PREFIX_.'newsletter_m24` (
 			`id` int(6) NOT NULL AUTO_INCREMENT,
 			`id_shop` INTEGER UNSIGNED NOT NULL DEFAULT \'1\',
 			`id_shop_group` INTEGER UNSIGNED NOT NULL DEFAULT \'1\',
@@ -130,13 +130,15 @@ class Blocknewsletter extends Module
 			`ip_registration_newsletter` varchar(15) NOT NULL,
 			`http_referer` VARCHAR(255) NULL,
 			`active` TINYINT(1) NOT NULL DEFAULT \'0\',
+			`gender` varchar(255) NOT NULL,
+			`postcode` varchar(15) NOT NULL,
 			PRIMARY KEY(`id`)
 		) ENGINE='._MYSQL_ENGINE_.' default CHARSET=utf8');
 	}
 
 	public function uninstall()
 	{
-		Db::getInstance()->execute('DROP TABLE '._DB_PREFIX_.'newsletter');
+		Db::getInstance()->execute('DROP TABLE '._DB_PREFIX_.'newsletter_m24');
 
 		return parent::uninstall();
 	}
@@ -148,12 +150,21 @@ class Blocknewsletter extends Module
 			Configuration::updateValue('NW_CONFIRMATION_EMAIL', (bool)Tools::getValue('NW_CONFIRMATION_EMAIL'));
 			Configuration::updateValue('NW_VERIFICATION_EMAIL', (bool)Tools::getValue('NW_VERIFICATION_EMAIL'));
 
-			$voucher = Tools::getValue('NW_VOUCHER_CODE');
-			if ($voucher && !Validate::isDiscountName($voucher))
+			$voucher_men = Tools::getValue('NW_VOUCHER_CODE_MEN');
+			if ($voucher_men && !Validate::isDiscountName($voucher_men))
 				$this->_html .= $this->displayError($this->l('The voucher code is invalid.'));
 			else
 			{
-				Configuration::updateValue('NW_VOUCHER_CODE', pSQL($voucher));
+				Configuration::updateValue('NW_VOUCHER_CODE_MEN', pSQL($voucher_men));
+				$this->_html .= $this->displayConfirmation($this->l('Settings updated'));
+			}
+
+			$voucher_women = Tools::getValue('NW_VOUCHER_CODE_WOMEN');
+			if ($voucher_women && !Validate::isDiscountName($voucher_women))
+				$this->_html .= $this->displayError($this->l('The voucher code is invalid.'));
+			else
+			{
+				Configuration::updateValue('NW_VOUCHER_CODE_WOMEN', pSQL($voucher_women));
 				$this->_html .= $this->displayConfirmation($this->l('Settings updated'));
 			}
 		}
@@ -164,7 +175,7 @@ class Blocknewsletter extends Module
 			if(preg_match('/(^N)/', $id))
 			{
 				$id = (int)substr($id, 1);
-				$sql = 'UPDATE '._DB_PREFIX_.'newsletter SET active = 0 WHERE id = '.$id;
+				$sql = 'UPDATE '._DB_PREFIX_.'newsletter_m24 SET active = 0 WHERE id = '.$id;
 				Db::getInstance()->execute($sql);
 			}
 			else
@@ -227,6 +238,10 @@ class Blocknewsletter extends Module
 			'newsletter_date_add' => array(
 				'title' => $this->l('Subscribed on'),
 				'type' => 'date',
+				'search' => false,
+			),
+			'postcode' => array(
+				'title' => $this->l('Postcode'),
 				'search' => false,
 			)
 		);
@@ -315,7 +330,7 @@ class Blocknewsletter extends Module
 	public function isNewsletterRegistered($customer_email)
 	{
 		$sql = 'SELECT `email`
-				FROM '._DB_PREFIX_.'newsletter
+				FROM '._DB_PREFIX_.'newsletter_m24
 				WHERE `email` = \''.pSQL($customer_email).'\'
 				AND id_shop = '.$this->context->shop->id;
 
@@ -344,6 +359,9 @@ class Blocknewsletter extends Module
 		if (empty($_POST['email']) || !Validate::isEmail($_POST['email']))
 			return $this->error = $this->l('Invalid email address.');
 
+		if (!Validate::isPostCode($_POST['postcode']))
+			return $this->error = $this->l('Invalid postcode.');
+
 		/* Unsubscription */
 		else if ($_POST['action'] == '1')
 		{
@@ -365,13 +383,15 @@ class Blocknewsletter extends Module
 				return $this->error = $this->l('This email address is already registered.');
 
 			$email = pSQL($_POST['email']);
+			$gender = pSQL($_POST['gender']);
+			$postcode = pSQL($_POST['postcode']);
 			if (!$this->isRegistered($register_status))
 			{
 				if (Configuration::get('NW_VERIFICATION_EMAIL'))
 				{
 					// create an unactive entry in the newsletter database
 					if ($register_status == self::GUEST_NOT_REGISTERED)
-						$this->registerGuest($email, false);
+						$this->registerGuest($email, false, $gender, $postcode);
 
 					if (!$token = $this->getToken($email, $register_status))
 						return $this->error = $this->l('An error occurred during the subscription process.');
@@ -387,7 +407,10 @@ class Blocknewsletter extends Module
 					else
 						return $this->error = $this->l('An error occurred during the subscription process.');
 
-					if ($code = Configuration::get('NW_VOUCHER_CODE'))
+					if ($gender == 1 && $code = Configuration::get('NW_VOUCHER_CODE_MEN'))
+						$this->sendVoucher($email, $code);
+
+					if ($gender == 2 && $code = Configuration::get('NW_VOUCHER_CODE_WOMEN'))
 						$this->sendVoucher($email, $code);
 
 					if (Configuration::get('NW_CONFIRMATION_EMAIL'))
@@ -400,7 +423,7 @@ class Blocknewsletter extends Module
 	public function getSubscribers()
 	{
 		$dbquery = new DbQuery();
-		$dbquery->select('c.`id_customer` AS `id`, s.`name` AS `shop_name`, gl.`name` AS `gender`, c.`lastname`, c.`firstname`, c.`email`, c.`newsletter` AS `subscribed`, c.`newsletter_date_add`');
+		$dbquery->select('c.`id_customer` AS `id`, s.`name` AS `shop_name`, gl.`name` AS `gender`, c.`lastname`, c.`firstname`, c.`email`, c.`newsletter` AS `subscribed`, c.`newsletter_date_add`, NULL as `postcode`');
 		$dbquery->from('customer', 'c');
 		$dbquery->leftJoin('shop', 's', 's.id_shop = c.id_shop');
 		$dbquery->leftJoin('gender', 'g', 'g.id_gender = c.id_gender');
@@ -412,9 +435,11 @@ class Blocknewsletter extends Module
 		$customers = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($dbquery->build());
 
 		$dbquery = new DbQuery();
-		$dbquery->select('CONCAT(\'N\', n.`id`) AS `id`, s.`name` AS `shop_name`, NULL AS `gender`, NULL AS `lastname`, NULL AS `firstname`, n.`email`, n.`active` AS `subscribed`, n.`newsletter_date_add`');
-		$dbquery->from('newsletter', 'n');
-		$dbquery->leftJoin('shop', 's', 's.id_shop = n.id_shop');
+		$dbquery->select('n.`id` AS `id`, gl.`name` AS `gender`, NULL AS `lastname`, NULL AS `firstname`, n.`email`, n.`active` AS `subscribed`, n.`newsletter_date_add`, n.`postcode`');
+		$dbquery->from('newsletter_m24', 'n');
+		$dbquery->leftJoin('shop', 's', 's.id_shop = n.id_shop'); 
+		$dbquery->leftJoin('gender', 'g', 'g.id_gender = n.gender');
+		$dbquery->leftJoin('gender_lang', 'gl', 'g.id_gender = gl.id_gender AND gl.id_lang = '.(int)$this->context->employee->id_lang);
 		$dbquery->where('n.`active` = 1');
 		if ($this->_searched_email)
 			$dbquery->where('n.`email` LIKE \'%'.pSQL($this->_searched_email).'%\' ');
@@ -460,10 +485,10 @@ class Blocknewsletter extends Module
 	protected function register($email, $register_status)
 	{
 		if ($register_status == self::GUEST_NOT_REGISTERED)
-			return $this->registerGuest($email);
+			return $this->registerGuest($email, $gender, $postcode);
 
 		if ($register_status == self::CUSTOMER_NOT_REGISTERED)
-			return $this->registerUser($email);
+			return $this->registerUser($email, $gender, $postcode);
 
 		return false;
 	}
@@ -471,7 +496,7 @@ class Blocknewsletter extends Module
 	protected function unregister($email, $register_status)
 	{
 		if ($register_status == self::GUEST_REGISTERED)
-			$sql = 'DELETE FROM '._DB_PREFIX_.'newsletter WHERE `email` = \''.pSQL($_POST['email']).'\' AND id_shop = '.$this->context->shop->id;
+			$sql = 'DELETE FROM '._DB_PREFIX_.'newsletter_m24 WHERE `email` = \''.pSQL($_POST['email']).'\' AND id_shop = '.$this->context->shop->id;
 		else if ($register_status == self::CUSTOMER_REGISTERED)
 			$sql = 'UPDATE '._DB_PREFIX_.'customer SET `newsletter` = 0 WHERE `email` = \''.pSQL($_POST['email']).'\' AND id_shop = '.$this->context->shop->id;
 
@@ -493,6 +518,8 @@ class Blocknewsletter extends Module
 		$sql = 'UPDATE '._DB_PREFIX_.'customer
 				SET `newsletter` = 1, newsletter_date_add = NOW(), `ip_registration_newsletter` = \''.pSQL(Tools::getRemoteAddr()).'\'
 				WHERE `email` = \''.pSQL($email).'\'
+				AND `gender` =\''.pSQL($gender).'\'
+				AND `postcode` =\''.pSQL($postcode).'\'
 				AND id_shop = '.$this->context->shop->id;
 
 		return Db::getInstance()->execute($sql);
@@ -506,13 +533,15 @@ class Blocknewsletter extends Module
 	 *
 	 * @return bool
 	 */
-	protected function registerGuest($email, $active = true)
+	protected function registerGuest($email, $active = true, $gender, $postcode)
 	{
-		$sql = 'INSERT INTO '._DB_PREFIX_.'newsletter (id_shop, id_shop_group, email, newsletter_date_add, ip_registration_newsletter, http_referer, active)
+		$sql = 'INSERT INTO '._DB_PREFIX_.'newsletter_m24 (id_shop, id_shop_group, email, gender, postcode, newsletter_date_add, ip_registration_newsletter, http_referer, active)
 				VALUES
 				('.$this->context->shop->id.',
 				'.$this->context->shop->id_shop_group.',
 				\''.pSQL($email).'\',
+				\''.pSQL($gender).'\',
+				\''.pSQL($postcode).'\',
 				NOW(),
 				\''.pSQL(Tools::getRemoteAddr()).'\',
 				(
@@ -531,7 +560,7 @@ class Blocknewsletter extends Module
 	public function activateGuest($email)
 	{
 		return Db::getInstance()->execute(
-			'UPDATE `'._DB_PREFIX_.'newsletter`
+			'UPDATE `'._DB_PREFIX_.'newsletter_m24`
 						SET `active` = 1
 						WHERE `email` = \''.pSQL($email).'\''
 		);
@@ -547,7 +576,7 @@ class Blocknewsletter extends Module
 	protected function getGuestEmailByToken($token)
 	{
 		$sql = 'SELECT `email`
-				FROM `'._DB_PREFIX_.'newsletter`
+				FROM `'._DB_PREFIX_.'newsletter_m24`
 				WHERE MD5(CONCAT( `email` , `newsletter_date_add`, \''.pSQL(Configuration::get('NW_SALT')).'\')) = \''.pSQL($token).'\'
 				AND `active` = 0';
 
@@ -555,18 +584,18 @@ class Blocknewsletter extends Module
 	}
 
 	/**
-	 * Returns a customer email by token
+	 * Returns a guest email by token
 	 *
 	 * @param string $token
 	 *
-	 * @return string email
+	 * @return int gender
 	 */
-	protected function getUserEmailByToken($token)
+	protected function getGuestGenderByToken($token)
 	{
-		$sql = 'SELECT `email`
-				FROM `'._DB_PREFIX_.'customer`
-				WHERE MD5(CONCAT( `email` , `date_add`, \''.pSQL(Configuration::get('NW_SALT')).'\')) = \''.pSQL($token).'\'
-				AND `newsletter` = 0';
+		$sql = 'SELECT `gender`
+				FROM `'._DB_PREFIX_.'newsletter_m24`
+				WHERE MD5(CONCAT( `email` , `newsletter_date_add`, \''.pSQL(Configuration::get('NW_SALT')).'\')) = \''.pSQL($token).'\'
+				AND `active` = 0';
 
 		return Db::getInstance()->getValue($sql);
 	}
@@ -582,7 +611,7 @@ class Blocknewsletter extends Module
 		if (in_array($register_status, array(self::GUEST_NOT_REGISTERED, self::GUEST_REGISTERED)))
 		{
 			$sql = 'SELECT MD5(CONCAT( `email` , `newsletter_date_add`, \''.pSQL(Configuration::get('NW_SALT')).'\')) as token
-					FROM `'._DB_PREFIX_.'newsletter`
+					FROM `'._DB_PREFIX_.'newsletter_m24`
 					WHERE `active` = 0
 					AND `email` = \''.pSQL($email).'\'';
 		}
@@ -607,6 +636,7 @@ class Blocknewsletter extends Module
 	public function confirmEmail($token)
 	{
 		$activated = false;
+		$gender = $this->getGuestGenderByToken($token);
 
 		if ($email = $this->getGuestEmailByToken($token))
 			$activated = $this->activateGuest($email);
@@ -616,8 +646,11 @@ class Blocknewsletter extends Module
 		if (!$activated)
 			return $this->l('This email is already registered and/or invalid.');
 
-		if ($discount = Configuration::get('NW_VOUCHER_CODE'))
-			$this->sendVoucher($email, $discount);
+		if ($gender == 1 && $discount_men = Configuration::get('NW_VOUCHER_CODE_MEN'))
+			$this->sendVoucher($email, $discount_men);
+
+		if ($gender == 2 && $discount_women = Configuration::get('NW_VOUCHER_CODE_WOMEN'))
+			$this->sendVoucher($email, $discount_women);
 
 		if (Configuration::get('NW_CONFIRMATION_EMAIL'))
 			$this->sendConfirmationEmail($email);
@@ -743,6 +776,14 @@ class Blocknewsletter extends Module
 		return $this->hookDisplayLeftColumn($params);
 	}
 
+	public function hookdisplayNewsletter($params)
+	{
+		if (!isset($this->prepared) || !$this->prepared)
+			$this->_prepareHook($params);
+		$this->prepared = true;
+		return $this->display(__FILE__, 'blocknewsletter.tpl');
+	}
+
 	public function hookDisplayHeader($params)
 	{
 		$this->context->controller->addCSS($this->_path.'blocknewsletter.css', 'all');
@@ -763,7 +804,7 @@ class Blocknewsletter extends Module
 		$id_shop = $params['newCustomer']->id_shop;
 		$email = $params['newCustomer']->email;
 		if (Validate::isEmail($email))
-			return (bool)Db::getInstance()->execute('DELETE FROM '._DB_PREFIX_.'newsletter WHERE id_shop='.(int)$id_shop.' AND email=\''.pSQL($email)."'");
+			return (bool)Db::getInstance()->execute('DELETE FROM '._DB_PREFIX_.'newsletter_m24 WHERE id_shop='.(int)$id_shop.' AND email=\''.pSQL($email)."'");
 
 		return true;
 	}
@@ -813,8 +854,15 @@ class Blocknewsletter extends Module
 					),
 					array(
 						'type' => 'text',
-						'label' => $this->l('Welcome voucher code'),
-						'name' => 'NW_VOUCHER_CODE',
+						'label' => $this->l('Welcome voucher code for men'),
+						'name' => 'NW_VOUCHER_CODE_MEN',
+						'class' => 'fixed-width-md',
+						'desc' => $this->l('Leave blank to disable by default.')
+					),
+					array(
+						'type' => 'text',
+						'label' => $this->l('Welcome voucher code for women'),
+						'name' => 'NW_VOUCHER_CODE_WOMEN',
 						'class' => 'fixed-width-md',
 						'desc' => $this->l('Leave blank to disable by default.')
 					),
@@ -988,7 +1036,8 @@ class Blocknewsletter extends Module
 		return array(
 			'NW_VERIFICATION_EMAIL' => Tools::getValue('NW_VERIFICATION_EMAIL', Configuration::get('NW_VERIFICATION_EMAIL')),
 			'NW_CONFIRMATION_EMAIL' => Tools::getValue('NW_CONFIRMATION_EMAIL', Configuration::get('NW_CONFIRMATION_EMAIL')),
-			'NW_VOUCHER_CODE' => Tools::getValue('NW_VOUCHER_CODE', Configuration::get('NW_VOUCHER_CODE')),
+			'NW_VOUCHER_CODE_MEN' => Tools::getValue('NW_VOUCHER_COD_MEN', Configuration::get('NW_VOUCHER_CODE_MEN')),
+			'NW_VOUCHER_CODE_WOMEN' => Tools::getValue('NW_VOUCHER_COD_WOMEN', Configuration::get('NW_VOUCHER_CODE_WOMEN')),
 			'COUNTRY' => Tools::getValue('COUNTRY'),
 			'SUSCRIBERS' => Tools::getValue('SUSCRIBERS'),
 			'OPTIN' => Tools::getValue('OPTIN'),
@@ -1052,7 +1101,7 @@ class Blocknewsletter extends Module
 		if ($who == 1 || $who == 0 || $who == 3)
 		{
 			$dbquery = new DbQuery();
-			$dbquery->select('c.`id_customer` AS `id`, s.`name` AS `shop_name`, gl.`name` AS `gender`, c.`lastname`, c.`firstname`, c.`email`, c.`newsletter` AS `subscribed`, c.`newsletter_date_add`');
+			$dbquery->select('c.`id_customer` AS `id`, s.`name` AS `shop_name`, gl.`name` AS `gender`, c.`lastname`, c.`firstname`, c.`email`, c.`newsletter` AS `subscribed`, c.`newsletter_date_add`, NULL AS `postcode`');
 			$dbquery->from('customer', 'c');
 			$dbquery->leftJoin('shop', 's', 's.id_shop = c.id_shop');
 			$dbquery->leftJoin('gender', 'g', 'g.id_gender = c.id_gender');
@@ -1076,8 +1125,8 @@ class Blocknewsletter extends Module
 		if (($who == 0 || $who == 2) && (!$optin || $optin == 2) && !$country)
 		{
 			$dbquery = new DbQuery();
-			$dbquery->select('CONCAT(\'N\', n.`id`) AS `id`, s.`name` AS `shop_name`, NULL AS `gender`, NULL AS `lastname`, NULL AS `firstname`, n.`email`, n.`active` AS `subscribed`, n.`newsletter_date_add`');
-			$dbquery->from('newsletter', 'n');
+			$dbquery->select('n.`id` AS `id`, s.`name` AS `shop_name`, NULL AS `gender`, NULL AS `lastname`, NULL AS `firstname`, n.`email`, n.`active` AS `subscribed`, n.`newsletter_date_add`, n.`postcode`');
+			$dbquery->from('newsletter_m24', 'n');
 			$dbquery->leftJoin('shop', 's', 's.id_shop = n.id_shop');
 			$dbquery->where('n.`active` = 1');
 			if ($id_shop)
