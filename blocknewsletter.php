@@ -120,8 +120,16 @@ class Blocknewsletter extends Module
 
 		Configuration::updateValue('NW_SALT', Tools::passwdGen(16));
 
-		return Db::getInstance()->execute('
+		$sql = '
 		CREATE TABLE IF NOT EXISTS `'._DB_PREFIX_.'newsletter_m24` (
+			`id` int(6) NOT NULL,
+			`gender` varchar(255) NOT NULL,
+			`postcode` varchar(15) NOT NULL,
+			PRIMARY KEY(`id`)
+		) ENGINE='._MYSQL_ENGINE_.' default CHARSET=utf8';
+
+		$sql_n = '
+		CREATE TABLE IF NOT EXISTS `'._DB_PREFIX_.'newsletter` (
 			`id` int(6) NOT NULL AUTO_INCREMENT,
 			`id_shop` INTEGER UNSIGNED NOT NULL DEFAULT \'1\',
 			`id_shop_group` INTEGER UNSIGNED NOT NULL DEFAULT \'1\',
@@ -130,15 +138,16 @@ class Blocknewsletter extends Module
 			`ip_registration_newsletter` varchar(15) NOT NULL,
 			`http_referer` VARCHAR(255) NULL,
 			`active` TINYINT(1) NOT NULL DEFAULT \'0\',
-			`gender` varchar(255) NOT NULL,
-			`postcode` varchar(15) NOT NULL,
 			PRIMARY KEY(`id`)
-		) ENGINE='._MYSQL_ENGINE_.' default CHARSET=utf8');
+		) ENGINE='._MYSQL_ENGINE_.' default CHARSET=utf8';
+
+		return Db::getInstance()->execute($sql) && Db::getInstance()->execute($sql_n);
 	}
 
 	public function uninstall()
 	{
 		Db::getInstance()->execute('DROP TABLE '._DB_PREFIX_.'newsletter_m24');
+		Db::getInstance()->execute('DROP TABLE '._DB_PREFIX_.'newsletter');
 
 		return parent::uninstall();
 	}
@@ -175,7 +184,7 @@ class Blocknewsletter extends Module
 			if(preg_match('/(^N)/', $id))
 			{
 				$id = (int)substr($id, 1);
-				$sql = 'UPDATE '._DB_PREFIX_.'newsletter_m24 SET active = 0 WHERE id = '.$id;
+				$sql = 'UPDATE '._DB_PREFIX_.'newsletter SET active = 0 WHERE id = '.$id;
 				Db::getInstance()->execute($sql);
 			}
 			else
@@ -330,7 +339,7 @@ class Blocknewsletter extends Module
 	public function isNewsletterRegistered($customer_email)
 	{
 		$sql = 'SELECT `email`
-				FROM '._DB_PREFIX_.'newsletter_m24
+				FROM '._DB_PREFIX_.'newsletter
 				WHERE `email` = \''.pSQL($customer_email).'\'
 				AND id_shop = '.$this->context->shop->id;
 
@@ -359,7 +368,7 @@ class Blocknewsletter extends Module
 		if (empty($_POST['email']) || !Validate::isEmail($_POST['email']))
 			return $this->error = $this->l('Invalid email address.');
 
-		if (!Validate::isPostCode($_POST['postcode']))
+		if (!Validate::isZipCodeFormat($_POST['postcode']))
 			return $this->error = $this->l('Invalid postcode.');
 
 		/* Unsubscription */
@@ -390,9 +399,11 @@ class Blocknewsletter extends Module
 				if (Configuration::get('NW_VERIFICATION_EMAIL'))
 				{
 					// create an unactive entry in the newsletter database
-					if ($register_status == self::GUEST_NOT_REGISTERED)
-						$this->registerGuest($email, false, $gender, $postcode);
-
+					if ($register_status == self::GUEST_NOT_REGISTERED) 
+					{	
+						$this->registerGuest($email, false);
+						$this->registerGuestNew($email, $gender, $postcode);
+					}
 					if (!$token = $this->getToken($email, $register_status))
 						return $this->error = $this->l('An error occurred during the subscription process.');
 
@@ -435,10 +446,11 @@ class Blocknewsletter extends Module
 		$customers = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($dbquery->build());
 
 		$dbquery = new DbQuery();
-		$dbquery->select('n.`id` AS `id`, gl.`name` AS `gender`, NULL AS `lastname`, NULL AS `firstname`, n.`email`, n.`active` AS `subscribed`, n.`newsletter_date_add`, n.`postcode`');
-		$dbquery->from('newsletter_m24', 'n');
+		$dbquery->select('n.`id` AS `id`, gl.`name` AS `gender`, NULL AS `lastname`, NULL AS `firstname`, n.`email`, n.`active` AS `subscribed`, n.`newsletter_date_add`, n24.`postcode`');
+		$dbquery->from('newsletter', 'n');
 		$dbquery->leftJoin('shop', 's', 's.id_shop = n.id_shop'); 
-		$dbquery->leftJoin('gender', 'g', 'g.id_gender = n.gender');
+		$dbquery->leftJoin('newsletter_m24', 'n24', 'n24.id = n.id');
+		$dbquery->leftJoin('gender', 'g', 'g.id_gender = n24.gender');
 		$dbquery->leftJoin('gender_lang', 'gl', 'g.id_gender = gl.id_gender AND gl.id_lang = '.(int)$this->context->employee->id_lang);
 		$dbquery->where('n.`active` = 1');
 		if ($this->_searched_email)
@@ -485,7 +497,8 @@ class Blocknewsletter extends Module
 	protected function register($email, $register_status)
 	{
 		if ($register_status == self::GUEST_NOT_REGISTERED)
-			return $this->registerGuest($email, $gender, $postcode);
+			return $this->registerGuest($email);
+
 
 		if ($register_status == self::CUSTOMER_NOT_REGISTERED)
 			return $this->registerUser($email, $gender, $postcode);
@@ -496,7 +509,7 @@ class Blocknewsletter extends Module
 	protected function unregister($email, $register_status)
 	{
 		if ($register_status == self::GUEST_REGISTERED)
-			$sql = 'DELETE FROM '._DB_PREFIX_.'newsletter_m24 WHERE `email` = \''.pSQL($_POST['email']).'\' AND id_shop = '.$this->context->shop->id;
+			$sql = 'DELETE FROM '._DB_PREFIX_.'newsletter WHERE `email` = \''.pSQL($_POST['email']).'\' AND id_shop = '.$this->context->shop->id;
 		else if ($register_status == self::CUSTOMER_REGISTERED)
 			$sql = 'UPDATE '._DB_PREFIX_.'customer SET `newsletter` = 0 WHERE `email` = \''.pSQL($_POST['email']).'\' AND id_shop = '.$this->context->shop->id;
 
@@ -513,7 +526,7 @@ class Blocknewsletter extends Module
 	 *
 	 * @return bool
 	 */
-	protected function registerUser($email)
+	protected function registerUser($email, $gender, $postcode)
 	{
 		$sql = 'UPDATE '._DB_PREFIX_.'customer
 				SET `newsletter` = 1, newsletter_date_add = NOW(), `ip_registration_newsletter` = \''.pSQL(Tools::getRemoteAddr()).'\'
@@ -533,15 +546,13 @@ class Blocknewsletter extends Module
 	 *
 	 * @return bool
 	 */
-	protected function registerGuest($email, $active = true, $gender, $postcode)
+	protected function registerGuest($email, $active = true)
 	{
-		$sql = 'INSERT INTO '._DB_PREFIX_.'newsletter_m24 (id_shop, id_shop_group, email, gender, postcode, newsletter_date_add, ip_registration_newsletter, http_referer, active)
+		$sql = 'INSERT INTO '._DB_PREFIX_.'newsletter (id_shop, id_shop_group, email, newsletter_date_add, ip_registration_newsletter, http_referer, active)
 				VALUES
 				('.$this->context->shop->id.',
 				'.$this->context->shop->id_shop_group.',
 				\''.pSQL($email).'\',
-				\''.pSQL($gender).'\',
-				\''.pSQL($postcode).'\',
 				NOW(),
 				\''.pSQL(Tools::getRemoteAddr()).'\',
 				(
@@ -556,11 +567,34 @@ class Blocknewsletter extends Module
 		return Db::getInstance()->execute($sql);
 	}
 
+	protected function registerGuestNew($email, $gender, $postcode)
+	{
+
+		// $sql = 'SELECT `id` FROM '._DB_PREFIX_.'newsletter
+		// 		WHERE `email` = \''.pSQL($email).'\'';
+
+		// $id_sql_n = Db::getInstance()->execute($sql);
+
+		$sql_n = 'INSERT INTO '._DB_PREFIX_.'newsletter_m24 (id, gender, postcode)
+				VALUES
+				((
+					SELECT n.id
+					FROM '._DB_PREFIX_.'newsletter n
+					WHERE n.email = \''.pSQL($email).'\'
+				),
+				\''.pSQL($gender).'\',
+				\''.pSQL($postcode).'\'
+				)';
+
+
+		return Db::getInstance()->execute($sql_n);
+	}
+
 
 	public function activateGuest($email)
 	{
 		return Db::getInstance()->execute(
-			'UPDATE `'._DB_PREFIX_.'newsletter_m24`
+			'UPDATE `'._DB_PREFIX_.'newsletter`
 						SET `active` = 1
 						WHERE `email` = \''.pSQL($email).'\''
 		);
@@ -576,7 +610,7 @@ class Blocknewsletter extends Module
 	protected function getGuestEmailByToken($token)
 	{
 		$sql = 'SELECT `email`
-				FROM `'._DB_PREFIX_.'newsletter_m24`
+				FROM `'._DB_PREFIX_.'newsletter`
 				WHERE MD5(CONCAT( `email` , `newsletter_date_add`, \''.pSQL(Configuration::get('NW_SALT')).'\')) = \''.pSQL($token).'\'
 				AND `active` = 0';
 
@@ -593,8 +627,9 @@ class Blocknewsletter extends Module
 	protected function getGuestGenderByToken($token)
 	{
 		$sql = 'SELECT `gender`
-				FROM `'._DB_PREFIX_.'newsletter_m24`
-				WHERE MD5(CONCAT( `email` , `newsletter_date_add`, \''.pSQL(Configuration::get('NW_SALT')).'\')) = \''.pSQL($token).'\'
+				FROM `'._DB_PREFIX_.'newsletter_m24` n24
+				LEFT JOIN `'._DB_PREFIX_.'newsletter` n ON n.`id` = n24.`id`
+				WHERE MD5(CONCAT( n.`email` , n.`newsletter_date_add`, \''.pSQL(Configuration::get('NW_SALT')).'\')) = \''.pSQL($token).'\'
 				AND `active` = 0';
 
 		return Db::getInstance()->getValue($sql);
@@ -611,7 +646,7 @@ class Blocknewsletter extends Module
 		if (in_array($register_status, array(self::GUEST_NOT_REGISTERED, self::GUEST_REGISTERED)))
 		{
 			$sql = 'SELECT MD5(CONCAT( `email` , `newsletter_date_add`, \''.pSQL(Configuration::get('NW_SALT')).'\')) as token
-					FROM `'._DB_PREFIX_.'newsletter_m24`
+					FROM `'._DB_PREFIX_.'newsletter`
 					WHERE `active` = 0
 					AND `email` = \''.pSQL($email).'\'';
 		}
