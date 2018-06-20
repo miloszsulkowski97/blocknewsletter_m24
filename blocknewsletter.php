@@ -141,13 +141,13 @@ class Blocknewsletter extends Module
 			PRIMARY KEY(`id`)
 		) ENGINE='._MYSQL_ENGINE_.' default CHARSET=utf8';
 
-		return Db::getInstance()->execute($sql) && Db::getInstance()->execute($sql_n);
+		return Db::getInstance()->execute($sql);
 	}
 
 	public function uninstall()
 	{
 		Db::getInstance()->execute('DROP TABLE '._DB_PREFIX_.'newsletter_m24');
-		Db::getInstance()->execute('DROP TABLE '._DB_PREFIX_.'newsletter');
+		// Db::getInstance()->execute('DROP TABLE '._DB_PREFIX_.'newsletter');
 
 		return parent::uninstall();
 	}
