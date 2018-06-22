@@ -616,6 +616,16 @@ class Blocknewsletter extends Module
 
 		return Db::getInstance()->getValue($sql);
 	}
+	
+	protected function getUserEmailByToken($token)
+	{
+		$sql = 'SELECT `email`
+				FROM `'._DB_PREFIX_.'customer`
+				WHERE MD5(CONCAT( `email` , `date_add`, \''.pSQL(Configuration::get('NW_SALT')).'\')) = \''.pSQL($token).'\'
+				AND `newsletter` = 0';
+
+		return Db::getInstance()->getValue($sql);
+	}
 
 	/**
 	 * Returns a guest email by token
